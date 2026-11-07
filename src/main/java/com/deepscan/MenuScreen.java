@@ -1,6 +1,5 @@
 package com.deepscan;
 
-import net.minecraft.Util;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
@@ -32,13 +31,13 @@ public class MenuScreen extends Screen {
 		"minecraft:note_block", "minecraft:dispenser", "minecraft:piston", "minecraft:redstone_wire",
 		"minecraft:oak_stairs", "minecraft:glowstone", "minecraft:sea_lantern", "minecraft:stone_slab"};
 
-	private final long openMs = Util.getMillis();
+	private final long openMs = System.currentTimeMillis();
 	private final Map<String, Float> anim = new HashMap<>();
 	private int tab, lastTab = -1, page, colorIdx, themeIdx;
 	private float[] hsv = {0, 1, 1};
 	private int mx, my;
 	private boolean down, pendingClick, clicked, closeRequested;
-	private long tabMs = Util.getMillis();
+	private long tabMs = System.currentTimeMillis();
 	private String drag;
 
 	public MenuScreen() { super(Component.literal("DeepScan")); }
@@ -175,7 +174,7 @@ public class MenuScreen extends Screen {
 		pendingClick = false;
 
 		Config c = Config.I;
-		long now = Util.getMillis();
+		long now = System.currentTimeMillis();
 		if (tab != lastTab) { lastTab = tab; tabMs = now; if (tab == 3) syncHsv(); }
 		float t = Math.min(1f, (now - openMs) / 280f), e = 1f - (1f - t) * (1f - t) * (1f - t);
 

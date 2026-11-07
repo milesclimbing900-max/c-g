@@ -4,7 +4,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.util.Mth;
-import net.minecraft.Util;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -95,7 +94,7 @@ public final class Scanner {
 
 	public static void tick(Minecraft mc) {
 		Config c = Config.I;
-		long now = Util.getMillis();
+		long now = System.currentTimeMillis();
 		if (mc.level == null || mc.player == null) { active = false; return; }
 
 		// reveal hits once the sweep line has passed them

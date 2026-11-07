@@ -1,6 +1,5 @@
 package com.deepscan;
 
-import net.minecraft.Util;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -281,7 +280,7 @@ public final class Overlay {
 		if (mc.player == null || mc.level == null || mc.options.hideGui) return;
 		Config c = Config.I;
 		float pt = dt.getGameTimeDeltaPartialTick(false);
-		long now = Util.getMillis();
+		long now = System.currentTimeMillis();
 		int w = mc.getWindow().getGuiScaledWidth(), h = mc.getWindow().getGuiScaledHeight();
 
 		if (Scanner.active && c.scanTint > 0) g.fill(0, 0, w, h, alpha(c.ringColor, c.scanTint));
