@@ -8,9 +8,11 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 
 import java.util.*;
+import java.util.function.Predicate;
 
 /** Sweeps loaded chunks outward from the player and records blocks that don't belong underground. */
 public final class Scanner {
@@ -29,8 +31,8 @@ public final class Scanner {
 	public static boolean active;
 	public static double sweepR, ox, oz;
 	public static int total, done;
+	public static long startMs, finishMs, lastRevealMs;
 
-	/** Things that generate naturally in the deepslate layer / caves / geodes / deep dark. */
 	private static final Set<String> NATURAL = Set.of(
 		"minecraft:air", "minecraft:cave_air", "minecraft:void_air",
 		"minecraft:stone", "minecraft:deepslate", "minecraft:tuff", "minecraft:granite",
@@ -45,7 +47,6 @@ public final class Scanner {
 		"minecraft:sculk_shrieker", "minecraft:sculk_sensor", "minecraft:clay", "minecraft:sand",
 		"minecraft:copper_ore", "minecraft:magma_block", "minecraft:obsidian");
 
-	/** Ancient city filler so deep dark cities don't spam results (toggle in menu). */
 	private static final Set<String> CITY = Set.of(
 		"minecraft:reinforced_deepslate", "minecraft:deepslate_bricks", "minecraft:cracked_deepslate_bricks",
 		"minecraft:deepslate_tiles", "minecraft:cracked_deepslate_tiles", "minecraft:polished_deepslate",
@@ -61,15 +62,22 @@ public final class Scanner {
 
 	public static void clear() { hits.clear(); seen.clear(); }
 
+	public static boolean has(int x, int y, int z) { return seen.contains(BlockPos.asLong(x, y, z)); }
+
 	private static boolean isTarget(Block b) {
-		return cache.computeIfAbsent(b, k -> {
+		Boolean v = cache.get(b);
+		if (v == null) {
 			Config c = Config.I;
-			String id = BuiltInRegistries.BLOCK.getKey(k).toString();
-			if (c.customList) return c.targets.contains(id);
-			if (NATURAL.contains(id) || id.endsWith("_ore") || c.ignored.contains(id)) return false;
-			return !(c.ignoreAncientCity && CITY.contains(id));
-		});
+			String id = BuiltInRegistries.BLOCK.getKey(b).toString();
+			if (c.customList) v = c.targets.contains(id);
+			else if (c.ignored.contains(id) || NATURAL.contains(id) || id.endsWith("_ore")) v = false;
+			else v = !(c.ignoreAncientCity && CITY.contains(id));
+			cache.put(b, v);
+		}
+		return v;
 	}
+
+	private static final Predicate<BlockState> WANTED = s -> !s.isAir() && isTarget(s.getBlock());
 
 	public static void start(Minecraft mc) {
 		if (mc.player == null || mc.level == null) return;
@@ -89,6 +97,7 @@ public final class Scanner {
 		queue.addAll(list);
 		total = list.size();
 		done = 0;
+		startMs = System.currentTimeMillis();
 		active = true;
 	}
 
@@ -97,8 +106,7 @@ public final class Scanner {
 		long now = System.currentTimeMillis();
 		if (mc.level == null || mc.player == null) { active = false; return; }
 
-		// reveal hits once the sweep line has passed them
-		for (Hit h : hits) if (h.t == 0 && (!active || sweepR >= h.dist)) h.t = now;
+		for (Hit h : hits) if (h.t == 0 && (!active || sweepR >= h.dist)) { h.t = now; lastRevealMs = now; }
 		if (!c.keepHighlighted) {
 			hits.removeIf(h -> {
 				boolean dead = h.t != 0 && now - h.t > c.pulseMs;
@@ -109,33 +117,42 @@ public final class Scanner {
 		if (!active) return;
 
 		sweepR += c.sweepSpeed;
-		int budget = 6;
-		while (!queue.isEmpty() && budget-- > 0) {
+		long t0 = System.nanoTime();
+		while (!queue.isEmpty()) {
 			int[] ch = queue.peek();
 			double dx = ch[0] * 16 + 8 - ox, dz = ch[1] * 16 + 8 - oz;
 			if (Math.sqrt(dx * dx + dz * dz) > sweepR + 8) break;
 			queue.poll();
 			scanChunk(mc.level, ch[0], ch[1]);
 			done++;
+			if (System.nanoTime() - t0 > 2_500_000L) break; // never spend more than ~2.5 ms/tick scanning
 		}
-		if (queue.isEmpty() && sweepR > c.radiusChunks * 16 + 16) active = false;
+		if (queue.isEmpty() && sweepR > c.radiusChunks * 16 + 16) { active = false; finishMs = now; }
 	}
 
 	private static void scanChunk(Level level, int cx, int cz) {
 		Config c = Config.I;
+		if (hits.size() >= c.maxHits) return;
 		ChunkAccess ch = level.getChunk(cx, cz, ChunkStatus.FULL, false);
 		if (ch == null) return;
-		int y0 = Math.max(c.minY, level.getMinY()), y1 = Math.min(c.maxY, level.getMaxY());
-		BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
+		LevelChunkSection[] secs = ch.getSections();
+		int minSec = level.getMinY() >> 4;
 		Set<Long> cand = new HashSet<>();
-		for (int y = y0; y <= y1; y++)
-			for (int x = 0; x < 16; x++)
-				for (int z = 0; z < 16; z++) {
-					p.set((cx << 4) + x, y, (cz << 4) + z);
-					BlockState s = ch.getBlockState(p);
-					if (s.isAir()) continue;
-					if (isTarget(s.getBlock())) cand.add(p.asLong());
-				}
+		for (int i = 0; i < secs.length; i++) {
+			int sy = (minSec + i) << 4;
+			if (sy + 15 < c.minY || sy > c.maxY) continue;
+			LevelChunkSection sec = secs[i];
+			if (sec == null || sec.hasOnlyAir() || !sec.maybeHas(WANTED)) continue; // palette check skips most sections instantly
+			for (int ly = 0; ly < 16; ly++) {
+				int y = sy + ly;
+				if (y < c.minY || y > c.maxY) continue;
+				for (int lx = 0; lx < 16; lx++)
+					for (int lz = 0; lz < 16; lz++) {
+						BlockState s = sec.getBlockState(lx, ly, lz);
+						if (!s.isAir() && isTarget(s.getBlock())) cand.add(BlockPos.asLong((cx << 4) + lx, y, (cz << 4) + lz));
+					}
+			}
+		}
 		int minN = (10 - c.sensitivity) / 3; // sens 10..1 -> 0..3 neighbours required
 		for (long key : cand) {
 			int x = BlockPos.getX(key), y = BlockPos.getY(key), z = BlockPos.getZ(key);
@@ -147,7 +164,7 @@ public final class Scanner {
 							if ((dx | dy | dz) != 0 && cand.contains(BlockPos.asLong(x + dx, y + dy, z + dz))) n++;
 				if (n < minN) continue;
 			}
-			if (seen.add(key)) {
+			if (hits.size() < c.maxHits && seen.add(key)) {
 				double ddx = x + 0.5 - ox, ddz = z + 0.5 - oz;
 				hits.add(new Hit(x, y, z, Math.sqrt(ddx * ddx + ddz * ddz)));
 			}
